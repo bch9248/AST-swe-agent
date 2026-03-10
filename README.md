@@ -1,10 +1,10 @@
-# AST-aware SWE-Agent v2
+# AST-aware SWE-Agent
 
 A research-oriented starter project for code-question answering over repositories.
 
-This version adds:
+This version includes:
 - Azure OpenAI tool-calling for an actual SWE-agent loop
-- vector retrieval over code chunks using Azure embeddings + FAISS
+- lexical / AST-aware retrieval over code chunks
 - Tree-sitter-based multi-language parsing
 - conversation memory in the Streamlit UI
 
@@ -62,19 +62,14 @@ requirements.txt
 
 ## Environment
 
-Copy `.env.example` to `.env` and fill in your Azure values:
-
-```bash
-cp .env.example .env
-```
-
-Required variables:
+Create a .env file for Azure API key:
 
 ```env
 AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_ENDPOINT=https://YOUR-RESOURCE.openai.azure.com
 AZURE_OPENAI_CHAT_DEPLOYMENT=YOUR_CHAT_DEPLOYMENT
-AZURE_OPENAI_EMBEDDING_DEPLOYMENT=YOUR_EMBEDDING_DEPLOYMENT
+AZURE_OPENAI_EMBEDDING_DEPLOYMENT=None
+AZURE_OPENAI_API_VERSION=VERSION
 ```
 
 ## Install
@@ -86,7 +81,7 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-streamlit run app/streamlit_app.py
+streamlit run app/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
 Then analyze:
@@ -94,15 +89,6 @@ Then analyze:
 ```text
 examples/python_demo_repo
 ```
-
-## UI capabilities
-
-- Analyze repository structure
-- inspect detected languages
-- inspect security findings
-- ask natural-language questions about the code
-- preserve multi-turn chat memory for the current browser session
-- inspect the tool trace used by the agent
 
 ## Built-in tools exposed to the LLM
 
@@ -120,7 +106,7 @@ examples/python_demo_repo
 ## Important implementation notes
 
 1. The parser is Tree-sitter-based, but the normalized schema is deliberately language-agnostic.
-2. Vector retrieval uses Azure embeddings. If the embedding deployment is not configured, semantic search is unavailable.
+2. Retrieval is embedding-free. Repository chunks are searched using lexical and symbol-aware matching instead of Azure embeddings or FAISS.
 3. Conversation memory is stored in Streamlit Session State, so it lasts for the connected browser session but is not a durable database.
 4. This project is a strong research scaffold, not a full static analyzer or a full autonomous patching system.
 
