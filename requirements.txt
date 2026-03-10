@@ -1,0 +1,8 @@
+streamlit>=1.44.0
+openai>=1.75.0
+python-dotenv>=1.0.1
+numpy>=1.26.4
+networkx>=3.3
+pydantic>=2.8.2
+tree-sitter>=0.25.0
+tree-sitter-language-pack>=0.10.0
