@@ -72,6 +72,10 @@ def init_state() -> None:
         st.session_state.uploaded_repo_name = None
     if "uploaded_temp_dir" not in st.session_state:
         st.session_state.uploaded_temp_dir = None
+    if "analyze_tool_limit" not in st.session_state:
+        st.session_state.analyze_tool_limit = 30
+    if "chat_tool_limit" not in st.session_state:
+        st.session_state.chat_tool_limit = 30
 
 
 init_state()
@@ -84,6 +88,26 @@ with st.sidebar:
         "Upload repository (.zip)",
         type=["zip"],
         help="Upload a zipped repository. The agent will interact with it through ACI tools.",
+    )
+
+    st.markdown("### Tool-call limits")
+
+    st.session_state.analyze_tool_limit = st.number_input(
+        "Analyze limit",
+        min_value=1,
+        max_value=100,
+        value=st.session_state.analyze_tool_limit,
+        step=1,
+        help="Maximum number of tool-calling rounds used during repository analysis.",
+    )
+
+    st.session_state.chat_tool_limit = st.number_input(
+        "Chat limit",
+        min_value=1,
+        max_value=100,
+        value=st.session_state.chat_tool_limit,
+        step=1,
+        help="Maximum number of tool-calling rounds used per chat turn.",
     )
 
     analyze_btn = st.button("Analyze repository", use_container_width=True)
@@ -115,8 +139,8 @@ with st.sidebar:
         
         with st.expander("All files in repository"):
             st.write(analysis.get("files", []))
-        # with st.expander("Raw ACI analysis output"):
-        #     st.code(analysis.get("analysis_raw_answer", ""), language="json")
+        with st.expander("Raw ACI analysis output"):
+            st.code(analysis.get("analysis_raw_answer", ""), language="json")
         with st.expander("Risks", expanded=True):
             risks = analysis.get("issues", [])
             if not risks:
@@ -155,7 +179,10 @@ if analyze_btn:
             st.session_state.agent = ASTAwareSWEAgentV2(st.session_state.settings)
             agent = st.session_state.agent
 
-            st.session_state.analysis = agent.analyze_repository(repo_path)
+            st.session_state.analysis = agent.analyze_repository(
+                repo_path,
+                analyze_tool_limit=int(st.session_state.analyze_tool_limit),
+            )
             st.session_state.memory = []
             st.session_state.chat_messages = []
             st.rerun()
@@ -192,7 +219,11 @@ else:
         with st.chat_message("user"):
             st.markdown(user_prompt)
 
-        result = agent.ask(user_prompt, st.session_state.memory)
+        result = agent.ask(
+            user_prompt,
+            st.session_state.memory,
+            chat_tool_limit=int(st.session_state.chat_tool_limit),
+        )
 
         if "conversation_append" in result:
             st.session_state.memory.extend(result["conversation_append"])

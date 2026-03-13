@@ -26,16 +26,27 @@ You must interact with the uploaded repository through tools.
 Do not answer substantive repository questions from prior assumptions.
 Before giving a meaningful answer, first inspect the repository using tools.
 
-Rules:
-- Start by calling get_state.
-- Then use direct repo interaction tools such as list_dir, find_files, read_file, or run_command.
-- Before claiming a file is missing, verify it with list_dir or find_files.
-- Before claiming a security issue exists, inspect the relevant files directly.
-- Before modifying a file, read it first.
-- After modifying a file, run a relevant verification command when possible.
+For repository understanding:
+- Prefer tree, find_entrypoints, grep_repo, and read_many_files over repeatedly reading one file at a time when possible.
+- Use find_files when you only know part of a filename.
+
+For risk analysis:
 - Ground every claim in observed tool results.
+- Before claiming a file is missing, verify it with list_dir, tree, or find_files.
+- Before claiming a security or reliability issue exists, inspect the relevant files directly and use grep_repo or run_command when helpful.
+
+For fix proposals:
+- Before modifying a file, read it first.
+- Prefer this safer patch workflow when suggesting a concrete fix:
+  1. apply_patch_candidate
+  2. check_syntax
+  3. run_verification
+  4. if verification fails, revert_last_patch
+  5. inspect get_last_patch_diff when needed
+- After modifying a file, run a relevant verification command when possible.
 - Do not say you inspected, edited, or executed anything unless you actually did so through tools.
-- Be concise but concrete. Include paths, command outputs, and evidence.
+
+Be concise but concrete. Include paths, command outputs, and evidence.
 """.strip()
 
 
@@ -53,8 +64,8 @@ You must:
 
 Rules:
 - Start by calling get_state.
-- Then inspect the repository root with list_dir.
-- Use find_files and read_file to inspect important docs/configs/source files.
+- Then inspect the repository root with tree or list_dir.
+- Use find_entrypoints, find_files, grep_repo, read_file, and read_many_files to inspect important docs/configs/source files.
 - Use run_command only when it adds real value.
 - Do not invent risks. Every risk must cite observed evidence.
 - If you are uncertain, say so.
@@ -87,7 +98,7 @@ Analyze this repository through direct ACI interaction.
 
 You must use tools before answering.
 
-Return only a valid JSON format following this schema:
+Return only a valid JSON object following this schema:
 {
   "summary": "short repository summary",
   "important_files": [
@@ -105,63 +116,48 @@ Return only a valid JSON format following this schema:
     "path/or/topic to inspect next"
   ]
 }
-
-Your output:
-{
-  "summary":""".strip()
+""".strip()
 
 
 class ASTAwareSWEAgentV2:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or Settings()
 
-        # Internal metadata pipeline (not exposed as LLM tools)
         self.detector = LanguageDetector()
         self.parser = TreeSitterMultiLanguageParser()
         self.graph_builder = CodeGraphBuilder()
-        self.scanner = SecurityScanner()  # now expected to be a no-op scanner
+        self.scanner = SecurityScanner()
 
-        # LLM client
         self.llm = AzureOpenAIToolAgentClient(self.settings) if self.settings.ready_for_chat else None
 
-        # Internal analysis state
         self.lexical_retriever = None
         self.index = None
         self.repo_tools: RepositoryTools | None = None
         self.issues = []
         self.analysis: dict[str, Any] | None = None
 
-        # ACI state exposed to the LLM
         self.workspace: Workspace | None = None
         self.executor: ACIExecutor | None = None
         self.aci_tools: ACITools | None = None
         self.registry: ToolRegistry | None = None
 
-    def analyze_repository(self, repo_path: str) -> dict[str, Any]:
-        """
-        Analyze repository structure internally, then run an ACI-based investigation
-        to produce the displayed analysis and risk summary.
-        """
+    def analyze_repository(self, repo_path: str, analyze_tool_limit: int = 24) -> dict[str, Any]:
         index = self.parser.parse_repository(repo_path)
         graph = self.graph_builder.build(index)
         issues = self.scanner.scan(index)
 
-        # Keep internal metadata only for UI and future internal use
         self.lexical_retriever = LexicalCodeRetriever(index.chunks)
         self.index = index
         self.repo_tools = RepositoryTools(index, graph, self.lexical_retriever)
         self.issues = issues
 
-        # Always initialize ACI workspace/tools
         self.workspace = Workspace(Path(repo_path))
         self.executor = ACIExecutor(self.workspace)
         self.aci_tools = ACITools(self.executor)
 
-        # IMPORTANT: only expose ACI tools to the LLM
         self.registry = ToolRegistry(self.aci_tools)
 
-        # Run ACI-driven analysis investigation
-        aci_analysis = self._run_aci_analysis()
+        aci_analysis = self._run_aci_analysis(max_tool_rounds=analyze_tool_limit)
 
         self.analysis = {
             "language": index.language,
@@ -187,13 +183,11 @@ class ASTAwareSWEAgentV2:
             "llm_enabled": self.llm is not None,
             "aci_enabled": True,
             "workspace_root": str(self.workspace.root),
+            "analyze_tool_limit": analyze_tool_limit,
         }
         return self.analysis
 
-    def _run_aci_analysis(self) -> dict[str, Any]:
-        """
-        Run an automatic ACI investigation when the user clicks Analyze repository.
-        """
+    def _run_aci_analysis(self, max_tool_rounds: int = 24) -> dict[str, Any]:
         if self.registry is None or self.workspace is None:
             return {
                 "summary": "Workspace is not initialized.",
@@ -225,19 +219,18 @@ class ASTAwareSWEAgentV2:
             pass
 
         try:
-            initial_listing = self.registry.execute("list_dir", json.dumps({"path": "."}, ensure_ascii=False))
+            initial_tree = self.registry.execute("tree", json.dumps({"path": ".", "max_depth": 3}, ensure_ascii=False))
             messages.append({
                 "role": "system",
-                "content": "Initial repository root listing:\n" + json.dumps(initial_listing, ensure_ascii=False),
+                "content": "Initial repository tree:\n" + json.dumps(initial_tree, ensure_ascii=False),
             })
         except Exception:
             pass
 
         messages.append({"role": "user", "content": ANALYZE_USER_PROMPT})
 
-        result = self._run_tool_loop(messages, max_tool_rounds=38)
+        result = self._run_tool_loop(messages, max_tool_rounds=max_tool_rounds)
         final_text = result.get("answer", "")
-
         parsed = self._parse_analysis_json(final_text)
 
         return {
@@ -249,7 +242,12 @@ class ASTAwareSWEAgentV2:
             "raw_answer": final_text,
         }
 
-    def ask(self, user_question: str, memory_messages: list[dict[str, str]]) -> dict[str, Any]:
+    def ask(
+        self,
+        user_question: str,
+        memory_messages: list[dict[str, str]],
+        chat_tool_limit: int = 28,
+    ) -> dict[str, Any]:
         if self.registry is None or self.workspace is None:
             return {"error": "Analyze a repository first."}
         if self.llm is None:
@@ -267,10 +265,10 @@ class ASTAwareSWEAgentV2:
             pass
 
         try:
-            initial_listing = self.registry.execute("list_dir", json.dumps({"path": "."}, ensure_ascii=False))
+            initial_tree = self.registry.execute("tree", json.dumps({"path": ".", "max_depth": 3}, ensure_ascii=False))
             messages.append({
                 "role": "system",
-                "content": "Initial repository root listing:\n" + json.dumps(initial_listing, ensure_ascii=False),
+                "content": "Initial repository tree:\n" + json.dumps(initial_tree, ensure_ascii=False),
             })
         except Exception:
             pass
@@ -278,7 +276,7 @@ class ASTAwareSWEAgentV2:
         messages.extend(memory_messages)
         messages.append({"role": "user", "content": user_question})
 
-        result = self._run_tool_loop(messages, max_tool_rounds=40)
+        result = self._run_tool_loop(messages, max_tool_rounds=chat_tool_limit)
         final_text = result.get("answer", "")
 
         if result.get("tool_trace"):
@@ -394,44 +392,7 @@ class ASTAwareSWEAgentV2:
             "tool_trace": tool_trace,
         }
 
-    def _extract_risks_from_text(self, text: str) -> list[dict[str, Any]]:
-        """
-        Simple parser for the analysis result. This does not create findings itself;
-        it only structures findings already produced by the ACI investigation.
-        """
-        if not text.strip():
-            return []
-
-        risks: list[dict[str, Any]] = []
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-
-        current: dict[str, Any] | None = None
-        for line in lines:
-            lower = line.lower()
-
-            if lower.startswith("risk:") or lower.startswith("- risk:"):
-                if current:
-                    risks.append(current)
-                current = {
-                    "title": line.split(":", 1)[1].strip() if ":" in line else line,
-                    "evidence": "",
-                    "severity": "unknown",
-                }
-            elif current is not None and lower.startswith("evidence:"):
-                current["evidence"] = line.split(":", 1)[1].strip() if ":" in line else line
-            elif current is not None and lower.startswith("severity:"):
-                current["severity"] = line.split(":", 1)[1].strip() if ":" in line else line
-
-        if current:
-            risks.append(current)
-
-        return risks
-    
     def _parse_analysis_json(self, text: str) -> dict[str, Any]:
-        """
-        Parse the final ACI analysis output as JSON.
-        Falls back to a minimal structure if parsing fails.
-        """
         if not text.strip():
             return {
                 "summary": "",
@@ -452,7 +413,6 @@ class ASTAwareSWEAgentV2:
 
             if not isinstance(summary, str):
                 summary = str(summary)
-
             if not isinstance(important_files, list):
                 important_files = []
             if not isinstance(risks, list):
