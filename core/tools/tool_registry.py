@@ -3,81 +3,145 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from core.tools.repository_tools import RepositoryTools
+from core.tools.aci_tools import ACITools
 
 
 class ToolRegistry:
-    def __init__(self, tools: RepositoryTools) -> None:
-        self.tools = tools
+    """
+    ACI-only tool registry.
+
+    The LLM can only interact with the uploaded repository through direct
+    workspace tools. AST/retrieval tools are intentionally hidden.
+    """
+
+    def __init__(self, aci_tools: ACITools) -> None:
+        self.aci_tools = aci_tools
+
         self._functions: dict[str, Callable[..., Any]] = {
-            "search_code": tools.search_code,
-            "semantic_search": tools.semantic_search,
-            "get_function_ast": tools.get_function_ast,
-            "get_class_ast": tools.get_class_ast,
-            "get_callers": tools.get_callers,
-            "get_callees": tools.get_callees,
-            "trace_variable": tools.trace_variable,
-            "read_snippet": tools.read_snippet,
-            "list_files": tools.list_files,
-            "summarize_repository": tools.summarize_repository,
+            "get_state": aci_tools.get_state,
+            "list_dir": aci_tools.list_dir,
+            "find_files": aci_tools.find_files,
+            "read_file": aci_tools.read_file,
+            "write_file": aci_tools.write_file,
+            "append_to_file": aci_tools.append_to_file,
+            "replace_in_file": aci_tools.replace_in_file,
+            "change_dir": aci_tools.change_dir,
+            "run_command": aci_tools.run_command,
         }
 
     def openai_tools(self) -> list[dict[str, Any]]:
         return [
-            self._tool_def("summarize_repository", "Get repository-level summary.", {"type": "object", "properties": {}, "additionalProperties": False}),
-            self._tool_def("list_files", "List repository files.", {"type": "object", "properties": {}, "additionalProperties": False}),
-            self._tool_def("search_code", "Keyword search across the repository.", {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-                "additionalProperties": False,
-            }),
-            self._tool_def("semantic_search", "Search relevant code chunks using lexical matching over code, symbols, and file context.", {
-                "type": "object",
-                "properties": {"query": {"type": "string"}, "top_k": {"type": "integer", "default": 5}},
-                "required": ["query"],
-                "additionalProperties": False,
-            }),
-            self._tool_def("get_function_ast", "Return normalized AST-like metadata for one function.", {
-                "type": "object",
-                "properties": {"function_name": {"type": "string"}},
-                "required": ["function_name"],
-                "additionalProperties": False,
-            }),
-            self._tool_def("get_class_ast", "Return normalized AST-like metadata for one class.", {
-                "type": "object",
-                "properties": {"class_name": {"type": "string"}},
-                "required": ["class_name"],
-                "additionalProperties": False,
-            }),
-            self._tool_def("get_callers", "List callers of a function.", {
-                "type": "object",
-                "properties": {"function_name": {"type": "string"}},
-                "required": ["function_name"],
-                "additionalProperties": False,
-            }),
-            self._tool_def("get_callees", "List callees of a function.", {
-                "type": "object",
-                "properties": {"function_name": {"type": "string"}},
-                "required": ["function_name"],
-                "additionalProperties": False,
-            }),
-            self._tool_def("trace_variable", "Trace where a variable name appears in normalized function metadata.", {
-                "type": "object",
-                "properties": {"variable": {"type": "string"}},
-                "required": ["variable"],
-                "additionalProperties": False,
-            }),
-            self._tool_def("read_snippet", "Read source lines from a file.", {
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string"},
-                    "start_line": {"type": "integer"},
-                    "end_line": {"type": "integer"},
+            self._tool_def(
+                "get_state",
+                "Get current workspace execution state.",
+                {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
                 },
-                "required": ["file_path", "start_line", "end_line"],
-                "additionalProperties": False,
-            }),
+            ),
+            self._tool_def(
+                "list_dir",
+                "List files/directories in the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "default": "."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "find_files",
+                "Find files by name substring in the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string"},
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "read_file",
+                "Read a file directly from the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "write_file",
+                "Write a full file in the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "append_to_file",
+                "Append content to a file in the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "replace_in_file",
+                "Replace text in a file in the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "old": {"type": "string"},
+                        "new": {"type": "string"},
+                        "count": {"type": "integer", "default": 1},
+                    },
+                    "required": ["path", "old", "new"],
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "change_dir",
+                "Change current working directory within the workspace.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "default": "."},
+                    },
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "run_command",
+                "Run a safe, workspace-scoped shell command.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "timeout_sec": {"type": "integer", "default": 20},
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+            ),
         ]
 
     def execute(self, tool_name: str, arguments_json: str) -> Any:
