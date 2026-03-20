@@ -30,6 +30,8 @@ class ToolRegistry:
             "append_to_file": aci_tools.append_to_file,
             "replace_in_file": aci_tools.replace_in_file,
             "change_dir": aci_tools.change_dir,
+            "create_repro_file": aci_tools.create_repro_file,
+            "run_repro_test": aci_tools.run_repro_test,
             "run_command": aci_tools.run_command,
             "apply_patch_candidate": aci_tools.apply_patch_candidate,
             "check_syntax": aci_tools.check_syntax,
@@ -177,6 +179,31 @@ class ToolRegistry:
                 {
                     "type": "object",
                     "properties": {"path": {"type": "string", "default": "."}},
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "create_repro_file",
+                "Create or overwrite a reproduction file inside the _aci_repro directory. Use this to make a minimal script/test case that reproduces a bug before attempting a fix.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
+                },
+            ),
+            self._tool_def(
+                "run_repro_test",
+                "Run a reproduction script or explicit reproduction command. Prefer this for localization and fix validation loops. If command is omitted, it will try to run the last created repro file with a default interpreter when possible.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "timeout_sec": {"type": "integer", "default": 40},
+                    },
                     "additionalProperties": False,
                 },
             ),

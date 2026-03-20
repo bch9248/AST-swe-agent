@@ -55,12 +55,18 @@ class ACITools:
     def change_dir(self, path: str = ".") -> dict[str, Any]:
         return self.executor.change_dir(path=path)
 
+    def create_repro_file(self, path: str, content: str) -> dict[str, Any]:
+        return self.executor.create_repro_file(path=path, content=content)
+
+    def run_repro_test(self, command: str | None = None, timeout_sec: int = 40) -> dict[str, Any]:
+        return self.executor.run_repro_test(command=command, timeout_sec=timeout_sec)
+
     def run_command(self, command: str, timeout_sec: int = 20) -> dict[str, Any]:
         return self.executor.run_command(command=command, timeout_sec=timeout_sec)
 
     def apply_patch_candidate(self, diff_text: str) -> dict[str, Any]:
         return self.executor.apply_patch_candidate(diff_text=diff_text)
-
+    
     def check_syntax(self, paths: list[str] | None = None) -> dict[str, Any]:
         return self.executor.check_syntax(paths=paths)
 

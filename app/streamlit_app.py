@@ -73,7 +73,7 @@ def init_state() -> None:
     if "uploaded_temp_dir" not in st.session_state:
         st.session_state.uploaded_temp_dir = None
     if "analyze_tool_limit" not in st.session_state:
-        st.session_state.analyze_tool_limit = 30
+        st.session_state.analyze_tool_limit = 50
     if "chat_tool_limit" not in st.session_state:
         st.session_state.chat_tool_limit = 30
 
@@ -95,7 +95,7 @@ with st.sidebar:
     st.session_state.analyze_tool_limit = st.number_input(
         "Analyze limit",
         min_value=1,
-        max_value=100,
+        max_value=200,
         value=st.session_state.analyze_tool_limit,
         step=1,
         help="Maximum number of tool-calling rounds used during repository analysis.",
@@ -136,17 +136,21 @@ with st.sidebar:
                     # "retrieval_mode": analysis.get("retrieval_mode"),
                 }
             )
-        
-        with st.expander("All files in repository"):
-            st.write(analysis.get("files", []))
-        with st.expander("Raw ACI analysis output"):
-            st.code(analysis.get("analysis_raw_answer", ""), language="json")
+        with st.expander("Prescanned risky files", expanded=True):
+            st.json(analysis.get("prescanned_risky_files", []))
+            
         with st.expander("Risks", expanded=True):
             risks = analysis.get("issues", [])
             if not risks:
                 st.write("No grounded risks reported.")
             else:
-                st.json(risks)
+                st.json(risks)   
+      
+        with st.expander("All files in repository"):
+            st.write(analysis.get("files", []))
+        with st.expander("Raw ACI analysis output"):
+            st.code(analysis.get("analysis_raw_answer", ""), language="json")
+        
 
         with st.expander("Important files"):
             st.json(analysis.get("analysis_important_files", []))

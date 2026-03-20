@@ -88,6 +88,11 @@ class ACIExecutor:
         self.last_patch_files: list[str] = []
         self.last_patch_backup: dict[str, str | None] = {}
 
+        self.repro_dir_name = "_aci_repro"
+        self.last_repro_file: str | None = None
+        self.last_repro_command: str | None = None
+        self.last_repro_result: dict[str, Any] | None = None
+
     def get_state(self) -> dict[str, Any]:
         return {
             "cwd": str(self.workspace.cwd),
@@ -97,6 +102,10 @@ class ACIExecutor:
             "last_edited_file": self.last_edited_file,
             "last_patch_files": self.last_patch_files,
             "has_revertible_patch": bool(self.last_patch_backup),
+            "repro_dir": self.repro_dir_name,
+            "last_repro_file": self.last_repro_file,
+            "last_repro_command": self.last_repro_command,
+            "has_repro_result": self.last_repro_result is not None,
         }
 
     def run_command(self, command: str, timeout_sec: int = 20) -> dict[str, Any]:
@@ -359,6 +368,76 @@ class ACIExecutor:
             "ok": True,
             "cwd": new_cwd,
         }
+
+    def create_repro_file(self, path: str, content: str) -> dict[str, Any]:
+        rel_path = self._normalize_repro_path(path)
+        abs_path = self.workspace.resolve_path(rel_path)
+        abs_path.parent.mkdir(parents=True, exist_ok=True)
+        abs_path.write_text(content, encoding="utf-8")
+
+        self.last_repro_file = rel_path
+        self.last_edited_file = rel_path
+
+        return {
+            "ok": True,
+            "path": rel_path,
+            "bytes_written": len(content.encode("utf-8")),
+            "repro_dir": self.repro_dir_name,
+        }
+
+    def run_repro_test(self, command: str | None = None, timeout_sec: int = 40) -> dict[str, Any]:
+        if command:
+            repro_command = command.strip()
+        else:
+            if not self.last_repro_file:
+                return {
+                    "ok": False,
+                    "message": "No repro file exists yet. Create one first or provide an explicit command.",
+                }
+
+            repro_path = self.last_repro_file
+            if repro_path.endswith(".py"):
+                repro_command = f'python "{repro_path}"'
+            elif repro_path.endswith(".sh"):
+                repro_command = f'bash "{repro_path}"'
+            else:
+                return {
+                    "ok": False,
+                    "message": "No default command for the last repro file type. Provide an explicit command.",
+                    "last_repro_file": self.last_repro_file,
+                }
+
+        result = self.run_command(repro_command, timeout_sec=timeout_sec)
+
+        wrapped = {
+            "ok": result["ok"],
+            "command": repro_command,
+            "exit_code": result.get("exit_code"),
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "cwd": result.get("cwd"),
+        }
+
+        self.last_repro_command = repro_command
+        self.last_repro_result = wrapped
+        return wrapped
+
+    def _normalize_repro_path(self, path: str) -> str:
+        cleaned = path.strip().replace("\\", "/")
+        cleaned = cleaned.lstrip("/")
+
+        if cleaned.startswith(self.repro_dir_name + "/") or cleaned == self.repro_dir_name:
+            rel_path = cleaned
+        else:
+            rel_path = f"{self.repro_dir_name}/{cleaned}"
+
+        candidate = self.workspace.resolve_path(rel_path)
+        rel = self.workspace.relpath(candidate)
+
+        if not (rel == self.repro_dir_name or rel.startswith(self.repro_dir_name + "/")):
+            raise ValueError("Repro files must stay inside the _aci_repro directory.")
+
+        return rel
 
     def apply_patch_candidate(self, diff_text: str) -> dict[str, Any]:
         files = self._extract_patch_files(diff_text)
