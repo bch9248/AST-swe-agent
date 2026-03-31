@@ -207,6 +207,7 @@ class ASTAwareSWEAgentV2:
             "analysis_pass_count": aci_analysis.get("pass_count", 0),
             "analysis_inspected_files": aci_analysis.get("inspected_files", []),
             "analysis_remaining_files": aci_analysis.get("remaining_files", []),
+            "analysis_inspection_mode": "tool_trace_strict",
             "embedding_enabled": False,
             "retrieval_mode": "aci_only",
             "llm_enabled": self.llm is not None,
@@ -258,10 +259,8 @@ class ASTAwareSWEAgentV2:
         aggregated_risks: list[dict[str, Any]] = []
         last_raw_answer = ""
 
-        # safety bound for whole-session controller
         max_passes = max(8, len(all_files) * 2 if all_files else 12)
 
-        # initial queue starts from all files, batched progressively
         if all_files:
             queued_targets.extend(all_files[: min(12, len(all_files))])
 
@@ -284,6 +283,10 @@ class ASTAwareSWEAgentV2:
             )
 
             parsed = pass_result["parsed"]
+            pass_inspected_files = self._extract_inspected_files_from_tool_trace(
+                pass_result["tool_trace"],
+                all_files=all_files,
+            )
             last_raw_answer = pass_result["raw_answer"]
             aggregated_tool_trace.extend(pass_result["tool_trace"])
 
@@ -291,6 +294,7 @@ class ASTAwareSWEAgentV2:
                 {
                     "pass_index": pass_index + 1,
                     "assigned_targets": current_targets,
+                    "inspected_files": sorted(pass_inspected_files),
                     "summary": parsed.get("summary", ""),
                     "important_files": parsed.get("important_files", []),
                     "risks": parsed.get("risks", []),
@@ -312,15 +316,9 @@ class ASTAwareSWEAgentV2:
                 parsed.get("risks", []),
             )
 
-            touched_files = set(current_targets)
-            touched_files.update(parsed.get("important_files", []))
-            touched_files.update(
-                x for x in parsed.get("next_targets", [])
-                if x in remaining_files or x in all_files
-            )
-
-            inspected_files.update(x for x in touched_files if x in all_files)
-            remaining_files -= inspected_files
+            touched_files = pass_inspected_files
+            inspected_files.update(touched_files)
+            remaining_files -= touched_files
 
             suggested_next = [
                 x for x in parsed.get("next_targets", [])
@@ -610,6 +608,125 @@ class ASTAwareSWEAgentV2:
                 "risks": [],
                 "next_targets": [],
             }
+
+    def _extract_inspected_files_from_tool_trace(
+        self,
+        tool_trace: list[dict[str, Any]],
+        all_files: list[str],
+    ) -> set[str]:
+        """
+        Strongest inspection accounting:
+        only count files that were actually touched by relevant tools.
+        """
+        all_files_set = set(all_files)
+        inspected: set[str] = set()
+
+        for item in tool_trace:
+            if not isinstance(item, dict):
+                continue
+
+            tool_name = item.get("tool_name")
+            arguments = item.get("arguments", {})
+            result = item.get("result", {})
+
+            if not isinstance(arguments, dict):
+                arguments = {}
+            if not isinstance(result, dict):
+                result = {}
+
+            if tool_name == "read_file":
+                path = arguments.get("path")
+                rel = self._normalize_repo_file_candidate(path, all_files_set)
+                if rel:
+                    inspected.add(rel)
+
+            elif tool_name == "read_many_files":
+                paths = arguments.get("paths", [])
+                if isinstance(paths, list):
+                    for path in paths:
+                        rel = self._normalize_repo_file_candidate(path, all_files_set)
+                        if rel:
+                            inspected.add(rel)
+
+                files_result = result.get("files", [])
+                if isinstance(files_result, list):
+                    for entry in files_result:
+                        if not isinstance(entry, dict):
+                            continue
+                        rel = self._normalize_repo_file_candidate(entry.get("path"), all_files_set)
+                        if rel:
+                            inspected.add(rel)
+
+            elif tool_name == "grep_repo":
+                grep_path = arguments.get("path")
+                if isinstance(grep_path, str) and grep_path.strip() and grep_path != ".":
+                    rel = self._normalize_repo_file_candidate(grep_path, all_files_set)
+                    if rel:
+                        inspected.add(rel)
+
+                grep_results = result.get("results", [])
+                if isinstance(grep_results, list):
+                    for entry in grep_results:
+                        if not isinstance(entry, dict):
+                            continue
+                        rel = self._normalize_repo_file_candidate(entry.get("file_path"), all_files_set)
+                        if rel:
+                            inspected.add(rel)
+
+            elif tool_name == "write_file":
+                path = arguments.get("path")
+                rel = self._normalize_repo_file_candidate(path, all_files_set)
+                if rel:
+                    inspected.add(rel)
+
+            elif tool_name == "replace_in_file":
+                path = arguments.get("path")
+                rel = self._normalize_repo_file_candidate(path, all_files_set)
+                if rel:
+                    inspected.add(rel)
+
+            elif tool_name == "apply_patch_candidate":
+                changed_files = result.get("files_changed", [])
+                if isinstance(changed_files, list):
+                    for path in changed_files:
+                        rel = self._normalize_repo_file_candidate(path, all_files_set)
+                        if rel:
+                            inspected.add(rel)
+
+        return inspected
+
+    def _normalize_repo_file_candidate(
+        self,
+        path: Any,
+        all_files_set: set[str],
+    ) -> str | None:
+        """
+        Normalize a tool-reported path into a repository-relative file path.
+        Ignore non-repo files such as _aci_repro artifacts unless they are in all_files.
+        """
+        if not isinstance(path, str):
+            return None
+
+        cleaned = path.strip().replace("\\", "/")
+        if not cleaned or cleaned == ".":
+            return None
+
+        while cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+        cleaned = cleaned.lstrip("/")
+
+        if cleaned in all_files_set:
+            return cleaned
+
+        if self.workspace is not None:
+            try:
+                rel = self.workspace.relpath(self.workspace.resolve_path(cleaned))
+                if rel in all_files_set:
+                    return rel
+            except Exception:
+                pass
+
+        return None
 
     @staticmethod
     def _dedupe_preserve_order(items: list[str]) -> list[str]:
